@@ -17,13 +17,14 @@ class ScanViewModel @Inject constructor(
 ) : ViewModel() {
 
     // For saving mock transaction scans
-    fun savePalmScan(userId: String, imageUrl: String? = null, metadata: String? = null) {
+    fun savePalmScan(userId: String, imageUrl: String? = null, metadata: String? = null, amount: Double = 0.0) {
         viewModelScope.launch {
             val palmScan = PalmScan(
                 userId = userId,
                 scanTimestamp = System.currentTimeMillis(),
                 imageUrl = imageUrl,
-                metadata = metadata
+                metadata = metadata,
+                amount = amount
             )
             palmScanRepository.insertPalmScan(palmScan)
         }

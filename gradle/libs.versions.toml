@@ -15,6 +15,9 @@ biometric = "1.2.0-alpha05"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
+securityCrypto = "1.1.0-alpha06"
+datastore = "1.1.1"
+
 
 [libraries]
 # AndroidX Core + Lifecycle
@@ -33,6 +36,9 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+
+# Data
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 
 
 
@@ -59,6 +65,10 @@ camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" 
 
 # Biometric Authentication
 biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
+
+# Security
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+
 
 # Testing Libraries
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -55,20 +55,36 @@ import com.codewithpk.palmpay.ui.components.PalmRegistrationPrompt
 import com.codewithpk.palmpay.ui.scan.ScanViewModel
 import com.codewithpk.palmpay.ui.theme.GreenSuccess
 import com.codewithpk.palmpay.ui.theme.PalmPayTheme
+import java.text.DecimalFormat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     navController: NavController,
-    onScanToPay: () -> Unit,
+    onScanToPay: (amount: String) -> Unit,
     onNavigateToHistory: () -> Unit,
     onNavigateToProfile: () -> Unit,
-    onInitiatePayment: (amount: String) -> Unit = {} // This will be handled by dialog
+    homeViewModel: HomeViewModel = hiltViewModel()
 ) {
     val scanViewModel: ScanViewModel = hiltViewModel()
     val enrolledPalm by scanViewModel.enrolledPalm.collectAsState(initial = null)
     var showRegistrationPrompt by remember { mutableStateOf(false) }
     var showGetPaymentDialog by remember { mutableStateOf(false) }
+
+    // Observe wallet balance
+    val currentBalance by homeViewModel.currentBalance.collectAsState(initial = 0.0)
+    val formattedBalance = remember(currentBalance) {
+        DecimalFormat("₹#,##0.00").format(currentBalance)
+    }
+
+    //  Observe total scans and last payment info
+    val totalScans by homeViewModel.totalScansMade.collectAsState(initial = 0)
+    val lastPaymentInfo by homeViewModel.lastSuccessfulPaymentInfo.collectAsState(initial = null)
+    val formattedLastPayment = lastPaymentInfo?.let { (amount, merchant) ->
+        val formattedAmt = DecimalFormat("₹#,##0").format(amount)
+        "$formattedAmt ($merchant)"
+    } ?: "N/A"
+
 
     // Conditional display of registration prompt
     if (enrolledPalm == null) {
@@ -166,7 +182,7 @@ fun HomeScreen(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
                     Text(
-                        text = "₹1,250.00", // Mock balance
+                        text = formattedBalance, // Mock balance
                         style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -181,8 +197,10 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                InfoTile(title = "Scans Made", value = "25", icon = Icons.Default.QrCodeScanner, accentColor = MaterialTheme.colorScheme.primary)
-                InfoTile(title = "Last Payment", value = "₹150 (Received)", icon = Icons.Default.History, accentColor = GreenSuccess)
+                //  Display dynamic totalScans
+                InfoTile(title = "Scans Made", value = totalScans.toString(), icon = Icons.Default.QrCodeScanner)
+                //  Display dynamic lastPaymentInfo
+                InfoTile(title = "Last Payment", value = formattedLastPayment, icon = Icons.Default.History, accentColor = GreenSuccess)
             }
         }
     }
@@ -210,7 +228,7 @@ fun HomeScreen(
             onPaymentAmountEntered = { amount ->
                 showGetPaymentDialog = false
                 // Navigate to palm scan for payment screen with amount as argument
-                navController.navigate(Routes.PALM_SCAN_FOR_PAYMENT)
+                onScanToPay(amount)
             }
         )
     }

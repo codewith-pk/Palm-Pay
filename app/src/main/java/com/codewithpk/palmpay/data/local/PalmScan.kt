@@ -9,5 +9,6 @@ data class PalmScan(
     val userId: String, // To link scan to a user (mock user for now)
     val scanTimestamp: Long,
     val imageUrl: String? = null, // Path to the captured palm image if stored locally
-    val metadata: String? = null // Any additional metadata from analysis
+    val metadata: String? = null, // Any additional metadata from analysis
+    val amount: Double = 0.0
 )
