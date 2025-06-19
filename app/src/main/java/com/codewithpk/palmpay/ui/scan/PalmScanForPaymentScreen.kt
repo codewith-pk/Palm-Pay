@@ -62,6 +62,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.codewithpk.palmpay.data.local.PalmScan // For saving payment transaction
+import com.codewithpk.palmpay.ui.home.HomeViewModel
 import com.codewithpk.palmpay.ui.theme.GreenSuccess
 import com.codewithpk.palmpay.ui.theme.RedFailure
 import kotlinx.coroutines.CoroutineScope
@@ -70,14 +71,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.DecimalFormat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 @Composable
 fun PalmScanForPaymentScreen(
+    paymentAmount: String,
     onPaymentProcessed: (isSuccess: Boolean, amount: String, merchant: String) -> Unit,
     onCancel: () -> Unit,
-    scanViewModel: ScanViewModel = hiltViewModel()
+    scanViewModel: ScanViewModel = hiltViewModel(),
+    homeViewModel: HomeViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
 
@@ -106,6 +110,8 @@ fun PalmScanForPaymentScreen(
         if (hasCameraPermission) {
             CameraPaymentScanContent(
                 scanViewModel = scanViewModel,
+                homeViewModel = homeViewModel,
+                paymentAmount = paymentAmount,
                 onPaymentProcessed = onPaymentProcessed
             )
         } else {
@@ -138,6 +144,8 @@ fun PalmScanForPaymentScreen(
 fun CameraPaymentScanContent(
     modifier: Modifier = Modifier,
     scanViewModel: ScanViewModel,
+    homeViewModel: HomeViewModel,
+    paymentAmount: String,
     onPaymentProcessed: (isSuccess: Boolean, amount: String, merchant: String) -> Unit
 ) {
     val context = LocalContext.current
@@ -147,6 +155,7 @@ fun CameraPaymentScanContent(
 
     var showScanningText by remember { mutableStateOf(false) }
     var processingScan by remember { mutableStateOf(false) }
+    var matchDetectedAndProcessed by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -180,57 +189,61 @@ fun CameraPaymentScanContent(
                         .build()
                         .also {
                             it.setAnalyzer(cameraExecutor) { imageProxy ->
-                                // Simulate real-time hand detection and matching here
-                                if (!processingScan) {
-                                    // Simulate hand detection (e.g., if any pixels are non-black in a certain area)
-                                    val isHandDetected = true // Always assume hand is detected for demo
+                                if (!processingScan && !matchDetectedAndProcessed) {
+                                    val isHandDetected = true // Simulate hand detection
                                     showScanningText = isHandDetected
 
                                     if (isHandDetected && enrolledPalm != null) {
-                                        processingScan = true // Prevent multiple triggers
-                                        // Simulate processing time
+                                        processingScan = true
                                         CoroutineScope(Dispatchers.Default).launch {
-                                            delay(500) // Simulate fast processing, ~0.5 seconds
-                                            if (isActive) { // Check if coroutine is still active (not cancelled)
-                                                // SIMULATED MATCHING: If a hand is detected and there's an enrolled palm, it's a match!
-                                                val isMatch = true
-                                                val mockAmount = "1250" // You can pass this from the previous dialog
+                                            delay(500) // Simulate processing time
+                                            if (isActive) {
+                                                val isMatch = true // Simulated match
+                                                val finalAmountString = paymentAmount // <<--- Use the parameter directly
+                                                val finalAmountDouble = finalAmountString.toDoubleOrNull() ?: 0.0
+
+                                                val isActualSuccess = isMatch && finalAmountDouble > 0 // Success only if amount > 0
+
                                                 val mockMerchant = "Kiran Kirana Store"
 
-                                                if (isMatch) {
-                                                    // Simulate successful payment
+                                                if (isActualSuccess) {
+                                                    homeViewModel.deposit(finalAmountDouble)
                                                     scanViewModel.savePalmScan(
                                                         userId = enrolledPalm?.userId ?: "unknown_user",
-                                                        imageUrl = "n/a", // Not saving image for payment scan
-                                                        metadata = "payment_scan_match"
+                                                        imageUrl = "n/a",
+                                                        metadata = "Payment to $mockMerchant",
+                                                        amount = finalAmountDouble
                                                     )
                                                     withContext(Dispatchers.Main) {
                                                         Toast.makeText(context, "Palm Matched! Payment Successful!", Toast.LENGTH_SHORT).show()
-                                                        onPaymentProcessed(true, mockAmount, mockMerchant)
+                                                        matchDetectedAndProcessed = true
+                                                        onPaymentProcessed(true, finalAmountString, mockMerchant)
                                                     }
                                                 } else {
                                                     withContext(Dispatchers.Main) {
                                                         Toast.makeText(context, "Palm Mismatched. Payment Failed.", Toast.LENGTH_SHORT).show()
-                                                        onPaymentProcessed(false, mockAmount, mockMerchant)
+                                                        matchDetectedAndProcessed = true
+                                                        onPaymentProcessed(false, finalAmountString, mockMerchant)
                                                     }
                                                 }
-                                                processingScan = false // Reset for next scan attempt if not navigating
+                                                processingScan = false
                                             }
                                         }
                                     } else if (isHandDetected && enrolledPalm == null) {
-                                        // If hand detected but no palm enrolled, prompt enrollment
                                         Handler(Looper.getMainLooper()).post {
-                                            Toast.makeText(context, "Palm Matched! Payment Successful!", Toast.LENGTH_SHORT).show()
-                                            //onPaymentProcessed(true, mockAmount, mockMerchant)
+                                            Toast.makeText(context, "No palm registered. Please register your palm first.", Toast.LENGTH_LONG).show()
+                                            // You might want to automatically navigate back to registration screen or home here
+                                            // For this hackathon demo, we'll just toast and stop further processing.
+                                            matchDetectedAndProcessed = true // Prevent repeated toasts
+                                            onPaymentProcessed(false, paymentAmount, "N/A - No Enrolled Palm")
                                         }
-
                                     }
                                 }
                                 imageProxy.close()
                             }
                         }
 
-                    val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA // Using front camera for palm scan in future we will add change to camera as well
+                    val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
                     try {
                         cameraProvider.unbindAll()
@@ -242,25 +255,33 @@ fun CameraPaymentScanContent(
                         )
                     } catch (exc: Exception) {
                         Log.e(TAG, "Use case binding failed", exc)
-                        Toast.makeText(context, "Failed to start camera: ${exc.message}", Toast.LENGTH_LONG).show()
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(context, "Failed to start camera: ${exc.message}", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }, ContextCompat.getMainExecutor(context))
             }
         )
 
-        // Hand outline overlay
         HandOutlineOverlay()
-
-        // Animated scanning line
         AnimatedScanningLine()
 
+        val amountToPayText = paymentAmount?.let {
+            try {
+                val formatted = DecimalFormat("₹#,##0.00").format(it.toDouble())
+                "Align your palm to verify payment of $formatted"
+            } catch (e: NumberFormatException) {
+                "Align your palm to verify payment." // Fallback
+            }
+        } ?: "Align your palm to verify payment."
+
         Text(
-            text = "Align your palm to verify payment.",
+            text = amountToPayText,
             color = Color.White,
             fontSize = 20.sp,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(y = (-150).dp) // Position above the hand outline
+                .offset(y = (-150).dp)
                 .background(Color.Black.copy(alpha = 0.6f), MaterialTheme.shapes.medium)
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         )

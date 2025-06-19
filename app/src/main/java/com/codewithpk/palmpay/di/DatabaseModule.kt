@@ -20,10 +20,8 @@ object DatabaseModule {
     @Provides
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
         return Room.databaseBuilder(
-            context,
-            AppDatabase::class.java,
-            "palmpay_db" // Name of your database file
-        ).build()
+            context, AppDatabase::class.java, "palmpay_db" // Name of your database file
+        ).fallbackToDestructiveMigration().build()
     }
 
     @Singleton

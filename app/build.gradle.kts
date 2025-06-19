@@ -87,6 +87,12 @@ dependencies {
     // --- Biometric Auth ---
     implementation(libs.biometric)
 
+    // --- Security (Encryption) ---
+    implementation(libs.androidx.security.crypto)
+
+    // --- DataStore (Preferences) ---
+    implementation(libs.androidx.datastore.preferences)
+
     // --- Testing ---
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

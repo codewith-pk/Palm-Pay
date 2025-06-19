@@ -42,6 +42,7 @@ import com.codewithpk.palmpay.ui.theme.PalmPayTheme
 import com.codewithpk.palmpay.data.local.PalmScan
 import com.codewithpk.palmpay.ui.theme.GreenSuccess
 import com.codewithpk.palmpay.ui.theme.RedFailure
+import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -145,6 +146,10 @@ fun TransactionCard(transaction: PalmScan) {
     val merchantName = metadataParts?.find { it.contains("Payment to", ignoreCase = true) || it.contains("Received from", ignoreCase = true) }?.substringAfter(" to ")?.substringAfter(" from ") ?: "Unknown"
     val amount = metadataParts?.find { it.contains("amount:", ignoreCase = true) }?.substringAfter("amount: ") ?: "0"
 
+    val formattedAmount = remember(transaction.amount) {
+        DecimalFormat("₹#,##0.00").format(transaction.amount)
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -173,7 +178,7 @@ fun TransactionCard(transaction: PalmScan) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "₹$amount",
+                    text = "$formattedAmount",
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
