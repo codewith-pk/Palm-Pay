@@ -1,10 +1,15 @@
 🚀 Palm Pay – The Future of Payment is in Your Palm
+
 ✨ Project Overview
 
-Palm Pay is a next-generation Android application that simulates a biometric palm-scan-based payment system. Designed with a sleek, minimalistic UI following Material Design 3 principles and a fintech-inspired aesthetic, the project serves as a high-quality portfolio piece, especially suited for interviews at innovation-focused startups like Five.id.
+Palm Pay is a next-generation Android application that simulates a biometric palm-scan-based payment system. Designed with a sleek, minimalistic UI following Material Design 3 principles and a fintech-inspired aesthetic, the project serves as a high-quality portfolio piece, especially suited for innovation-focused startups.
+
+
 🎯 Project Objective
 
-To demonstrate system-level Android development skills by building a smart, secure, and intuitive palm-payment simulation app. It covers all critical areas required for advanced Android interviews and showcases real-world, scalable architecture.
+To demonstrate system-level Android development skills by building a smart, secure, and intuitive palm-payment simulation app. It covers all critical areas required for advanced Android and showcases real-world, scalable architecture.
+
+
 💡 Features
 
     🔐 Biometric Login
@@ -37,7 +42,9 @@ To demonstrate system-level Android development skills by building a smart, secu
     🔄 Background Processing
     WorkManager handles tasks like offline payment sync simulation.
 
+
 🔧 Tech Stack
+
 🛠 Languages & Frameworks:
 
     Kotlin
