@@ -2,6 +2,7 @@ package com.codewithpk.palmpay.ui.scan
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.RectF
 import android.net.Uri
 import android.util.Log
 import android.view.ViewGroup
@@ -10,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
@@ -23,11 +25,10 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -41,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +60,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.codewithpk.palmpay.data.ml.HandDetectionAnalyzer
+import com.codewithpk.palmpay.data.ml.HandDetectionListener
+import com.codewithpk.palmpay.data.ml.DetectedHand
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import android.graphics.PointF // Import Android PointF for canvas drawing
+import android.view.ViewTreeObserver // Import for layout listener
+import android.view.Surface // Import for Surface rotation constants (e.g., Surface.ROTATION_0)
+import androidx.compose.foundation.layout.Arrangement
+
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -135,15 +146,40 @@ fun CameraPreviewWithOverlay(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
 
+    // State to hold the current dimensions of the PreviewView
+    var previewWidth by remember { mutableStateOf(0) }
+    var previewHeight by remember { mutableStateOf(0) }
+    // State to hold the current display rotation
+    var displayRotation by remember { mutableStateOf(0) }
+
+
+    // Initialize MediaPipe analyzer and observe its detectedHand flow
+    val analyzer = remember {
+        HandDetectionAnalyzer(context, RunningMode.LIVE_STREAM, object : HandDetectionListener {
+            override fun onHandDetected(handRectF: RectF?, landmarks: List<PointF>?) {
+                // The analyzer directly updates its internal StateFlow `_detectedHand`.
+                // We'll observe `analyzer.detectedHand` directly in the composable.
+            }
+        })
+    }
+    // Collect the latest detected hand state from the analyzer's StateFlow
+    val detectedHand by analyzer.detectedHand.collectAsState()
+
+
     DisposableEffect(Unit) {
+        // This effect runs once when the composable enters the composition.
+        // It's responsible for managing the lifecycle of the analyzer.
         onDispose {
-            cameraExecutor.shutdown()
+            cameraExecutor.shutdown() // Shut down the executor for ImageAnalysis
+            analyzer.stop() // Stop MediaPipe detector gracefully to release its resources
         }
     }
 
     Box(modifier = modifier) {
+        // AndroidView to embed the CameraX PreviewView into Compose
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -152,43 +188,56 @@ fun CameraPreviewWithOverlay(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    scaleType = PreviewView.ScaleType.FILL_CENTER // Scale to fill the view, maintaining aspect ratio
+
+                    // Add a listener to get the actual dimensions of the PreviewView once it's laid out
+                    viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+                        override fun onGlobalLayout() {
+                            previewWidth = width
+                            previewHeight = height
+                            // NEW: Get display rotation here and update state
+                            displayRotation = this@apply.display?.rotation ?: 0
+                            viewTreeObserver.removeOnGlobalLayoutListener(this) // Remove listener to avoid multiple calls
+                        }
+                    })
                 }
             },
-            update = { previewView ->
+            update = { previewView -> // `previewView` is now accessible here
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
                 cameraProviderFuture.addListener({
                     val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
+                    // Setup Preview Use Case
                     val preview = Preview.Builder().build().also {
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
 
+                    // Setup ImageCapture Use Case (for taking a photo during enrollment)
                     imageCapture = ImageCapture.Builder()
-                        .setTargetRotation(previewView.display.rotation)
+                        .setTargetRotation(previewView.display.rotation) // Use display rotation
                         .build()
 
+                    // Setup ImageAnalysis Use Case (for real-time hand detection with MediaPipe)
                     val imageAnalysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                         .also {
-                            it.setAnalyzer(cameraExecutor) { imageProxy ->
-                                // For registration, we might not need continuous analysis.
-                                // For payment, this is where the real-time detection/matching will go.
-                                imageProxy.close()
-                            }
+                            it.setAnalyzer(cameraExecutor, analyzer) // Set our MediaPipe analyzer here
                         }
 
-                    val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                    val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA // Use front camera for palm scan
 
                     try {
+                        // Unbind any previous use cases before rebinding
                         cameraProvider.unbindAll()
+                        // Bind all use cases to the lifecycle owner
                         cameraProvider.bindToLifecycle(
                             lifecycleOwner,
                             cameraSelector,
                             preview,
-                            imageCapture,
-                            imageAnalysis
+                            imageCapture, // Bind ImageCapture for taking photos
+                            imageAnalysis // Bind ImageAnalysis for real-time hand detection
                         )
                     } catch (exc: Exception) {
                         Log.e(TAG, "Use case binding failed", exc)
@@ -198,14 +247,32 @@ fun CameraPreviewWithOverlay(
             }
         )
 
-        // Hand outline overlay
-        HandOutlineOverlay()
-
-        // Animated scanning line
+        // Draw dynamic Hand Overlay based on MediaPipe detection results
+        // Pass the actual dimensions of the PreviewView for correct scaling
+        if (previewWidth > 0 && previewHeight > 0) { // Only draw if dimensions are known
+            DynamicHandOverlay(
+                detectedHand?.boundingBox,
+                detectedHand?.landmarks,
+                previewViewWidth = previewWidth.toFloat(),
+                previewViewHeight = previewHeight.toFloat(),
+                imageWidth = detectedHand?.inputImageWidth?.toFloat() ?: 0f, // Pass original image width
+                imageHeight = detectedHand?.inputImageHeight?.toFloat() ?: 0f, // Pass original image height
+                isFrontCamera = true, // Assuming front camera, adjust if camera is dynamic
+                displayRotation = displayRotation // Pass the state variable for display rotation
+            )
+        }
+        // Animated scanning line (visual effect)
         AnimatedScanningLine()
 
-        val overlayText = if (isRegistrationMode) "Align your palm to the outline to register." else "Align your palm to verify payment."
-        val buttonText = if (isRegistrationMode) "Register Palm" else "Simulate Payment Scan" // Will change for real-time later
+        val isHandVisible = detectedHand?.boundingBox != null
+        // Dynamic overlay text based on hand visibility and mode
+        val overlayText = when {
+            isRegistrationMode && !isHandVisible -> "Align your hand to the outline."
+            isRegistrationMode && isHandVisible -> "Hold still. Analyzing your palm lines..."
+            !isRegistrationMode && !isHandVisible -> "Align your palm to verify payment."
+            !isRegistrationMode && isHandVisible -> "Verifying payment with palm scan..."
+            else -> "Processing..."
+        }
 
         Text(
             text = overlayText,
@@ -213,103 +280,263 @@ fun CameraPreviewWithOverlay(
             fontSize = 20.sp,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(y = (-150).dp)
-                .background(Color.Black.copy(alpha = 0.6f), MaterialTheme.shapes.medium)
+                .offset(y = (-150).dp) // Position text above the hand area
+                .background(Color.Black.copy(alpha = 0.6f), MaterialTheme.shapes.medium) // Semi-transparent background
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         )
 
         Button(
             onClick = {
                 if (isRegistrationMode) {
-                    val photoFile = File(
-                        context.externalMediaDirs.firstOrNull(),
-                        SimpleDateFormat(FILENAME_FORMAT, Locale.US).format(System.currentTimeMillis()) + ".jpg"
-                    )
-                    val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
+                    // Only allow photo capture if a hand is currently detected by MediaPipe
+                    if (detectedHand?.boundingBox != null) {
+                        val photoFile = File(
+                            context.externalMediaDirs.firstOrNull(), // Use external media directory
+                            SimpleDateFormat(FILENAME_FORMAT, Locale.US).format(System.currentTimeMillis()) + ".jpg"
+                        )
+                        val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
-                    imageCapture?.takePicture(
-                        outputOptions,
-                        ContextCompat.getMainExecutor(context),
-                        object : ImageCapture.OnImageSavedCallback {
-                            override fun onError(exc: ImageCaptureException) {
-                                Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
-                                Toast.makeText(context, "Photo capture failed: ${exc.message}", Toast.LENGTH_LONG).show()
+                        imageCapture?.takePicture(
+                            outputOptions,
+                            ContextCompat.getMainExecutor(context), // Executor for callbacks
+                            object : ImageCapture.OnImageSavedCallback {
+                                override fun onError(exc: ImageCaptureException) {
+                                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
+                                    Toast.makeText(context, "Photo capture failed: ${exc.message}", Toast.LENGTH_LONG).show()
+                                }
+
+                                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                                    val savedUri = output.savedUri ?: Uri.fromFile(photoFile)
+                                    val msg = "Palm enrolled! Path: $savedUri"
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    Log.d(TAG, msg)
+
+                                    // Simulate feature extraction and saving to DB
+                                    // In a real app, you would pass the captured image data to an ML model
+                                    // here to extract unique biometric features for storage.
+                                    scanViewModel.enrollPalm(
+                                        userId = "user_001", // Hardcoded user ID for demo; in real app, get from auth
+                                        palmImagePath = savedUri.toString(),
+                                        // Use detected landmarks as a mock 'pattern' feature data
+                                        mockFeatureData = detectedHand?.landmarks?.joinToString(",") { "${it.x},${it.y}" } ?: "no_landmarks_captured"
+                                    )
+                                    // Log a scan for "Scans Made" counter (enrollment is also a form of scan)
+                                    scanViewModel.savePalmScan(
+                                        userId = "user_001",
+                                        imageUrl = savedUri.toString(),
+                                        metadata = "Palm Enrollment",
+                                        amount = 0.0
+                                    )
+                                    onScanActionCompleted() // Navigate away after successful enrollment
+                                }
                             }
-
-                            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                                val savedUri = output.savedUri ?: Uri.fromFile(photoFile)
-                                val msg = if (isRegistrationMode) "Palm enrolled! Path: $savedUri" else "Payment palm scanned! Path: $savedUri"
-                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                Log.d(TAG, msg)
-
-                                // Simulate feature extraction and saving to DB
-                                scanViewModel.enrollPalm(
-                                    userId = "user_001", // Hardcoded for demo; in real app, get from auth
-                                    palmImagePath = savedUri.toString(),
-                                    mockFeatureData = "mock_palm_feature_${System.currentTimeMillis()}"
-                                )
-                                onScanActionCompleted() // Navigate away after successful enrollment/simulated payment
-                            }
-                        }
-                    )
+                        )
+                    } else {
+                        Toast.makeText(context, "Please align your hand in the frame first.", Toast.LENGTH_SHORT).show()
+                    }
                 } else {
+                    // This button is less critical in real-time mode as detection is continuous.
+                    // It could be used to manually trigger a single scan or just indicate ready state.
                     Toast.makeText(context, "Real-time palm scan for payment initiated...", Toast.LENGTH_SHORT).show()
-                    // In payment mode, this button might not be needed if auto-scan.
-                    // For now, it will act as a trigger, and the image analysis loop will "match".
                 }
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 32.dp)
         ) {
-            Text(buttonText)
+            Text(if (isRegistrationMode) "Enroll Palm" else "Start Scan")
         }
     }
 }
 
+// These are shared Composables for drawing overlays. They can be moved to a common file like ui.components
 @Composable
-fun HandOutlineOverlay(modifier: Modifier = Modifier) {
+fun DynamicHandOverlay(
+    handRectF: RectF?,
+    landmarks: List<PointF>?,
+    previewViewWidth: Float, // Actual width of the PreviewView
+    previewViewHeight: Float, // Actual height of the PreviewView
+    imageWidth: Float, // Original width of the image processed by MediaPipe
+    imageHeight: Float, // Original height of the image processed by MediaPipe
+    isFrontCamera: Boolean, // True if using front camera (for mirroring)
+    displayRotation: Int, // NEW: Pass the display rotation
+    modifier: Modifier = Modifier
+) {
     Canvas(modifier = modifier.fillMaxSize()) {
-        val width = size.width
-        val height = size.height
-
-        // Define a simplified hand outline path
-        val path = Path().apply {
-            moveTo(width * 0.35f, height * 0.5f) // Wrist left
-            cubicTo(width * 0.2f, height * 0.4f, width * 0.2f, height * 0.2f, width * 0.3f, height * 0.1f) // Thumb base
-            cubicTo(width * 0.35f, height * 0.05f, width * 0.45f, height * 0.05f, width * 0.5f, height * 0.1f) // Thumb tip
-            cubicTo(width * 0.6f, height * 0.05f, width * 0.7f, height * 0.05f, width * 0.75f, height * 0.15f) // Index finger tip
-            cubicTo(width * 0.85f, height * 0.25f, width * 0.85f, height * 0.45f, width * 0.7f, height * 0.5f) // Pinky finger to wrist
-            lineTo(width * 0.35f, height * 0.5f) // Back to start
-            close()
+        if (imageWidth == 0f || imageHeight == 0f || previewViewWidth == 0f || previewViewHeight == 0f) {
+            return@Canvas
         }
-        drawPath(
-            path = path,
-            color = Color.White.copy(alpha = 0.8f),
-            style = Stroke(width = 4.dp.toPx())
-        )
+
+        // Calculate scaling factors from original image resolution to preview view resolution
+        val scaleX = previewViewWidth / imageWidth
+        val scaleY = previewViewHeight / imageHeight
+
+        val effectiveScale: Float
+        val xOffset: Float
+        val yOffset: Float
+
+        val previewAspectRatio = previewViewWidth / previewViewHeight
+        val imageAspectRatio = imageWidth / imageHeight
+
+        if (previewAspectRatio > imageAspectRatio) { // Preview is wider (letterboxing horizontally)
+            effectiveScale = previewViewHeight / imageHeight
+            xOffset = (previewViewWidth - imageWidth * effectiveScale) / 2f
+            yOffset = 0f
+        } else { // Preview is taller or same aspect ratio (letterboxing vertically)
+            effectiveScale = previewViewWidth / imageWidth
+            xOffset = 0f
+            yOffset = (previewViewHeight - imageHeight * effectiveScale) / 2f
+        }
+
+        // Function to transform a single point from original image coordinates to canvas coordinates
+        fun transformPoint(point: PointF): Offset {
+            var transformedX = point.x
+            var transformedY = point.y
+
+            // Apply rotation and mirroring logic based on device display rotation and camera type
+            // This logic assumes MediaPipe gives results relative to the raw image (usually landscape for sensor)
+            // and PreviewView rotates this for display.
+            when (displayRotation) {
+                Surface.ROTATION_0 -> { // Device in portrait (upright)
+                    // Raw image (e.g., 640x480 landscape) is rotated 90deg CW to fit portrait display.
+                    // So, swap X and Y, and adjust Y for the new origin.
+                    val tempX = transformedX
+                    transformedX = transformedY // Old Y becomes new X
+                    transformedY = imageWidth - tempX // Old X becomes new Y, flipped horizontally
+                }
+                Surface.ROTATION_90 -> { // Device in landscape (left)
+                    // Image is already landscape. No coordinate swap needed.
+                    // Just potential mirroring.
+                }
+                Surface.ROTATION_180 -> { // Device in upside-down portrait
+                    // Raw image rotated 270deg CW.
+                    // Needs full 180deg rotation: flip X and Y relative to image dimensions.
+                    transformedX = imageWidth - transformedX
+                    transformedY = imageHeight - transformedY
+                }
+                Surface.ROTATION_270 -> { // Device in upside-down landscape (right)
+                    // Raw image rotated 90deg CCW.
+                    // Swap X and Y, and adjust X for new origin.
+                    val tempX = transformedX
+                    transformedX = imageHeight - transformedY // Old Y becomes new X, flipped
+                    transformedY = tempX // Old X becomes new Y
+                }
+            }
+
+            // Apply horizontal flip for front camera *after* rotation compensation.
+            // This corrects the mirror effect.
+            if (isFrontCamera) {
+                // The width to flip against depends on whether the image was conceptually rotated.
+                val effectiveWidthForFlip = when (displayRotation) {
+                    Surface.ROTATION_0, Surface.ROTATION_180 -> imageHeight // If rotated to portrait, effective width is original height
+                    else -> imageWidth // If landscape, effective width is original width
+                }
+                transformedX = effectiveWidthForFlip - transformedX
+            }
+
+            // Scale coordinates to PreviewView dimensions and apply letterboxing offsets
+            return Offset(
+                x = (transformedX * effectiveScale) + xOffset,
+                y = (transformedY * effectiveScale) + yOffset
+            )
+        }
+
+        // Draw bounding box (optional, can be removed to match image)
+        // You can comment out or remove this if you only want the skeletal lines and dots.
+//        handRectF?.let { rect ->
+//            val topLeft = transformPoint(PointF(rect.left, rect.top))
+//            val topRight = transformPoint(PointF(rect.right, rect.top))
+//            val bottomLeft = transformPoint(PointF(rect.left, rect.bottom))
+//            val bottomRight = transformPoint(PointF(rect.right, rect.bottom))
+//
+//            drawPath(
+//                path = Path().apply {
+//                    moveTo(topLeft.x, topLeft.y)
+//                    lineTo(topRight.x, topRight.y)
+//                    lineTo(bottomRight.x, bottomRight.y)
+//                    lineTo(bottomLeft.x, bottomLeft.y)
+//                    close()
+//                },
+//                color = Color.Transparent, // Changed to Transparent to match the example image (no bounding box)
+//                style = Stroke(width = 0.dp.toPx()) // No stroke for transparent
+//            )
+//        }
+
+        // Draw landmarks as green circles
+        landmarks?.forEach { point ->
+            val transformedPoint = transformPoint(point)
+            drawCircle(
+                color = Color.Green, // Green dots for landmarks
+                center = transformedPoint,
+                radius = 8.dp.toPx() // Slightly larger dots for visibility
+            )
+        }
+
+        // Draw lines connecting landmarks (skeletal structure - Red lines)
+        if (!landmarks.isNullOrEmpty()) {
+            val connections = listOf(
+                // Wrist to base of fingers (Palm base)
+                0 to 1, // Wrist to Thumb_CMC
+                0 to 5, // Wrist to Index_MCP
+                0 to 9, // Wrist to Middle_MCP
+                0 to 13, // Wrist to Ring_MCP
+                0 to 17, // Wrist to Pinky_MCP
+
+                // Thumb connections
+                1 to 2, 2 to 3, 3 to 4,
+                // Index finger connections
+                5 to 6, 6 to 7, 7 to 8,
+                // Middle finger connections
+                9 to 10, 10 to 11, 11 to 12,
+                // Ring finger connections
+                13 to 14, 14 to 15, 15 to 16,
+                // Pinky finger connections
+                17 to 18, 18 to 19, 19 to 20,
+
+                // Connections between finger bases for the palm outline
+                5 to 9,
+                9 to 13,
+                13 to 17
+            )
+
+            connections.forEach { (startIdx, endIdx) ->
+                if (landmarks.size > startIdx && landmarks.size > endIdx) {
+                    val startPoint = transformPoint(landmarks[startIdx])
+                    val endPoint = transformPoint(landmarks[endIdx])
+                    drawLine(
+                        color = Color.Red, // Red lines for connections
+                        start = startPoint,
+                        end = endPoint,
+                        strokeWidth = 4.dp.toPx() // Thickness of skeletal lines
+                    )
+                }
+            }
+        }
+        // REMOVED: Simulated palm lines (yellow and cyan lines) to match the reference image.
     }
 }
+
 
 @Composable
 fun AnimatedScanningLine(modifier: Modifier = Modifier) {
     val infiniteTransition = rememberInfiniteTransition(label = "scanningLineTransition")
     val offsetY by infiniteTransition.animateFloat(
-        initialValue = -0.3f, // Start above the scan area
-        targetValue = 0.3f, // End below the scan area
+        initialValue = 0f, // Start at the top edge of the scan area
+        targetValue = 1f, // End at the bottom edge of the scan area
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing), // 2 seconds to traverse
-            repeatMode = RepeatMode.Reverse
+            animation = tween(2000, easing = LinearEasing), // 2 seconds for one pass
+            repeatMode = RepeatMode.Reverse // Scan up and down
         ), label = "scanningLineOffset"
     )
 
     Canvas(modifier = modifier.fillMaxSize()) {
-        val yPos = size.height * (0.5f + offsetY) // Animate vertically around center
+        val yPos = size.height * offsetY
+
         drawLine(
-            color = Color.Green, // Green for scanning
-            start = Offset(size.width * 0.2f, yPos),
-            end = Offset(size.width * 0.8f, yPos),
-            strokeWidth = 4.dp.toPx()
+            color = Color(0xFF4CAF50), // Green color for the scanning line
+            start = Offset(0f, yPos), // Start from left edge of canvas
+            end = Offset(size.width, yPos), // End at right edge of canvas
+            strokeWidth = 4.dp.toPx() // Thickness of the scanning line
         )
     }
 }

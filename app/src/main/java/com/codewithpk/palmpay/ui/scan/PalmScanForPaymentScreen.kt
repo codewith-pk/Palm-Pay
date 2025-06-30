@@ -263,7 +263,7 @@ fun CameraPaymentScanContent(
             }
         )
 
-        HandOutlineOverlay()
+        //HandOutlineOverlay()
         AnimatedScanningLine()
 
         val amountToPayText = paymentAmount?.let {

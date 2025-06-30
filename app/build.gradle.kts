@@ -46,6 +46,12 @@ android {
         kotlinCompilerExtensionVersion = "1.6.10"
     }
 
+    packaging { // Required for ML Kit models
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
 }
 
 dependencies {
@@ -92,6 +98,9 @@ dependencies {
 
     // --- DataStore (Preferences) ---
     implementation(libs.androidx.datastore.preferences)
+
+
+    implementation(libs.mediapipe.tasks.vision)
 
     // --- Testing ---
     testImplementation(libs.junit)
